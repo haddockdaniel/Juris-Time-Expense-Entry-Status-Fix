@@ -23,7 +23,20 @@ namespace JurisUtilityBase
         public decimal quantity { get; set; }
         public bool Summarize { get; set; }
         public int newEntryStatus { get; set; }
+        public int tbdid { get; set; }
+        public int utid { get; set; }
+        public int pbbatch { get; set; }
+        public int pbrec { get; set; }
+        public int btid { get; set; }
 
+        public TimeEntry()
+        {
+            tbdid = 0;
+            utid = 0;
+            pbbatch = 0;
+            pbrec = 0;
+            btid = 0;
+        }
 
 
     }

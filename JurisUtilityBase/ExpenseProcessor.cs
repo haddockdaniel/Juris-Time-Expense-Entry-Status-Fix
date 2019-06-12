@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Data;
+using System.IO;
 
 namespace JurisUtilityBase
 {
@@ -18,9 +19,7 @@ namespace JurisUtilityBase
 
         DataSet ds;
 
-        DataSet temp = new DataSet();
-
-        int batchDetailID = 0;
+        public List<ExpenseEntry> allExp = new List<ExpenseEntry>();
 
         public List<ExpenseEntry> correctedExpenses = new List<ExpenseEntry>();
 
@@ -28,24 +27,29 @@ namespace JurisUtilityBase
         {
             if (ds != null)
                 ds.Clear();
-            if (temp != null)
-                temp.Clear();
             //go through each status individually
 
 
                 //due to the size and nature of the data, we will do them by EntryType (6, 7, 8, 9). We ignore all draft time (0-5)
-                string SQL = "SELECT  EntryID, dbo.jfn_FormatClientCode(CliCode) as clicode,dbo.jfn_FormatMatterCode(MatCode) as matcode " +
-                             " ,EntryDate ,ExpenseScheduleCode ,Units ,Amount, Summarize, EntryStatus " +
-                             " FROM ExpenseEntry t " +
-                             " inner join matter m on m.matsysnbr = t.MatterSysNbr " +
-                             " inner join client c on c.clisysnbr = ClientSysNbr " +
-                             " where t.entryid = " + ID;
+                string SQL = "SELECT  t.EntryID, dbo.jfn_FormatClientCode(CliCode) as clicode,dbo.jfn_FormatMatterCode(MatCode) as matcode " +
+                               "   ,t.EntryDate ,ExpenseScheduleCode ,Units ,Amount, Summarize, EntryStatus " +
+                               "   ,tbd.ebdid, ut.ueid, pb.PBEDUEBatch, pb.PBEDUERecNbr, bt.BeID, " +
+								"  pb1.PBESDUEBatch, pb1.PBESDUERecNbr " +
+                               "   FROM ExpenseEntry t " +
+                               "   inner join matter m on m.matsysnbr = t.MatterSysNbr  " +
+                               "   inner join client c on c.clisysnbr = ClientSysNbr  " +
+                               "   left outer join ExpenseEntryLink tel on tel.entryid = t.entryid  " +
+								"  left outer join ExpBatchDetail tbd on tel.ebdid = tbd.ebdid  " +
+								"  left outer join UnbilledExpense ut on ut.ueid = tbd.ebdid  " +
+								"  left outer join PreBillExpDetailItem pb on pb.PBEDUEBatch = ut.uebatch and pb.PBEDUERecNbr = ut.UeRecNbr  " +
+								"  left outer join PreBillExpSumDetail pb1 on pb1.PBESDUEBatch = ut.uebatch and pb1.PBESDUERecNbr = ut.UeRecNbr  " +
+                               "   left outer join BilledExpenses bt on bt.beid = tbd.ebdid  " +
+                               "   where t.entrystatus = " + ID;
 
                 ds = _jurisUtility.RecordsetFromSQL(SQL);
-                DataRow dr = ds.Tables[0].Rows[0];
 
-                //get all status = 6
-
+                foreach (DataRow dr in ds.Tables[0].Rows)
+                {
                     ExpenseEntry te = new ExpenseEntry();
                     te.amount = Convert.ToDecimal(dr["Amount"].ToString().Trim());
                     te.quantity = Convert.ToDecimal(dr["Units"].ToString().Trim());
@@ -55,6 +59,20 @@ namespace JurisUtilityBase
                     te.Date = DateTime.Parse(dr["EntryDate"].ToString().Trim()).ToString("MM/dd/yyyy");
                     te.oldEntryStatus = Convert.ToInt32(dr["EntryStatus"].ToString().Trim());
                     te.ExpCode = dr["ExpenseScheduleCode"].ToString().Trim();
+                    if (!string.IsNullOrEmpty(dr["ebdid"].ToString().Trim()))
+                        te.tbdid = Convert.ToInt32(dr["ebdid"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["ueid"].ToString().Trim()))
+                        te.utid = Convert.ToInt32(dr["ueid"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["PBEDUEBatch"].ToString().Trim()))
+                        te.pbbatch = Convert.ToInt32(dr["PBEDUEBatch"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["PBEDUERecNbr"].ToString().Trim()))
+                        te.pbrec = Convert.ToInt32(dr["PBEDUERecNbr"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["PBESDUEBatch"].ToString().Trim()))
+                        te.pbbatch1 = Convert.ToInt32(dr["PBESDUEBatch"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["PBESDUERecNbr"].ToString().Trim()))
+                        te.pbrec1 = Convert.ToInt32(dr["PBESDUERecNbr"].ToString().Trim());
+                    if (!string.IsNullOrEmpty(dr["BeID"].ToString().Trim()))
+                        te.btid = Convert.ToInt32(dr["BeID"].ToString().Trim());
                     if (dr["Summarize"].ToString().Trim() == "Y")
                         te.isBillable = true;
                     else
@@ -64,199 +82,140 @@ namespace JurisUtilityBase
                     te.hours = 0;
                     te.isBillable = true;
                     te.newEntryStatus = -1;
+                    allExp.Add(te);
+                }
 
+                ds.Clear();
 
-                //go through each one and see if they are legit
-                switch (te.oldEntryStatus)
-                {
-                    case 6:
-                        {
-                            ds.Clear();
-                            temp.Clear();
-                            //6 means they should be in tdb but NOT in unbilled or billedtime
-
-                                batchDetailID = 0;
-                                if (!isInEBD(te.ID))
-                                    addToErrorsExp(0, "Recorded expense was not in ExpBatchDetail. Setting to Draft", te);
-                                else //it IS in tbd but it should NOT be in unbilled or billed time
-                                {
-                                    //unbilledtime
-                                    if (isInUnbilledExpense(batchDetailID))//if it IS
-                                    {
-                                        //see if it is in prebillfeeitem
-                                        if (isOnPreBillExp(Convert.ToInt32(temp.Tables[0].Rows[0][0].ToString()), Convert.ToInt32(temp.Tables[0].Rows[0][1].ToString()))) //it IS in unbilled AND prebill
-                                            addToErrorsExp(8, "Recorded expense was on a PreBill. Setting to 'On PreBill'", te);
-                                        else //it is NOT in PreBill
-                                            addToErrorsExp(7, "Recorded expense was on in UnbilledExp. Setting to Posted", te);
-                                    }
-                                    //billedtime
-                                    else if (isBilledExp(batchDetailID)) //it IS in billed so it needs to be 9
-                                        addToErrorsExp(9, "Recorded expense was in BilledExp. Setting to Billed", te);
-
-                                }
-                            break;
-                        }
-
-
-                    case 7:
-                        {
-                            ds.Clear();
-                            temp.Clear();
-                            //7 means they should be in unbilledtime AND TBD but NOT in prebillfeeitem or billedtime
-
-                                batchDetailID = 0;
-                                if (!isInEBD(te.ID))
-                                    addToErrorsExp(0, "Unbilled expense was not in ExpBatchDetail. Setting to Draft", te);
-                                else //it IS in tbd but it needs to be in unbilledtime
-                                {
-                                    //unbilledtime
-                                    if (isInUnbilledExpense(batchDetailID))//if it IS
-                                    {
-                                        //see if it is in prebillfeeitem
-                                        if (isOnPreBillExp(Convert.ToInt32(temp.Tables[0].Rows[0][0].ToString()), Convert.ToInt32(temp.Tables[0].Rows[0][1].ToString()))) //it IS in unbilled AND prebill
-                                            addToErrorsExp(8, "Unbilled expense was on a PreBill. Setting to 'On PreBill'", te);
-                                        // else it is NOT in PreBill so we do nothing because it is IN tbd and IN unbilledtime
-                                    }
-                                    else //it is in tbd but NOT unbilledtime so we see if it is in billedtime
-                                    {
-                                        //billedtime
-                                        if (isBilledExp(batchDetailID)) //it IS in billed so it needs to be 9
-                                            addToErrorsExp(9, "Recorded expense was in BilledExp. Setting to Billed", te);
-                                        else //not in billedtime, unbilledtime or prebill so it is a 6
-                                            addToErrorsExp(6, "Unbilled expense was in ExpBatchDetail but NOT UnbilledExp. Setting to Recorded", te);
-
-                                    }
-
-
-                                }
-                            
-                            break;
-                        }
-
-                    case 8:
-                        {
-                            ds.Clear();
-                            temp.Clear();
-                            //8 means they should be in tdb AND unbilledtime AND prebillfeeitem
-
-                                batchDetailID = 0;
-                                if (!isInEBD(te.ID))
-                                    addToErrorsExp(0, "Prebill expense was not in ExpBatchDetail. Setting to Draft", te);
-                                else //it IS in tbd
-                                {
-                                    //unbilledtime
-                                    if (isInUnbilledExpense(batchDetailID))//if it IS
-                                    {
-                                        //see if it is not in prebillfeeitem
-                                        if (!isOnPreBillExp(Convert.ToInt32(temp.Tables[0].Rows[0][0].ToString()), Convert.ToInt32(temp.Tables[0].Rows[0][1].ToString()))) //it IS in unbilled AND prebill
-                                            addToErrorsExp(7, "Prebill expense was not on PreBill but WAS in UnbilledExp. Setting to Posted", te);
-                                        //else do nothing because it is in all 3 tables
-                                    }
-                                    else //NOT in unbilledtime but it IS in tbd
-                                    {
-                                        //billedtime
-                                        if (isBilledExp(batchDetailID)) //it IS in billed so it needs to be 9
-                                            addToErrorsExp(9, "Prebill texpense was in BilledExp. Setting to Billed", te);
-                                        else //not in unbilled, billed but IS in tbd
-                                            addToErrorsExp(6, "Prebill expense was not in UnbilledExp but IS in ExpBatchDetail. Setting to Recorded", te);
-                                    }
-
-
-
-                                }
-                            
-                            break;
-                        }
-
-                    case 9:
-                        {
-                            ds.Clear();
-                            temp.Clear();
-                            //9 means it SHOULD be in TBD and billedtime but NOT in unbilledTime or PreBillFeeItem
-
-                                batchDetailID = 0;
-                                if (!isInEBD(te.ID))
-                                    addToErrorsExp(0, "Billed expense was not in ExpBatchDetail. Setting to Draft", te);
-                                else //it IS in tbd but it should NOT be in unbilled or billed time
-                                {
-                                    //unbilledtime
-                                    if (isInUnbilledExpense(batchDetailID))//if it IS
-                                    {
-                                        //see if it is in prebillfeeitem
-                                        if (isOnPreBillExp(Convert.ToInt32(temp.Tables[0].Rows[0][0].ToString()), Convert.ToInt32(temp.Tables[0].Rows[0][1].ToString()))) //it IS in unbilled AND prebill
-                                            addToErrorsExp(8, "Billed expense was on a PreBill. Setting to 'On PreBill'", te);
-                                        else //it is NOT in PreBill
-                                            addToErrorsExp(7, "Billed expense was in UnbilledExp. Setting to Posted", te);
-                                    }
-                                    //billedtime
-                                    else if (!isBilledExp(batchDetailID)) //it IS NOT in billed so it needs to be 0
-                                        addToErrorsExp(0, "Billed expense was not in BilledExp. Setting to Draft", te);
-                                }
-                            
-                            break;
-                        }
-                }//end switch
 
         }
 
-
-        private bool isInEBD(int entryID)
+        public void compareExpenseEntries(ExpenseEntry tt)
         {
-            string SQL = "select ebdid from ExpBatchDetail where ebdid in (select ebdid from ExpenseEntryLink where EntryID = " + entryID + ")";
-            DataSet ds = _jurisUtility.RecordsetFromSQL(SQL);
-            if (ds.Tables[0].Rows.Count == 0)
-                return false;
-            else
+            switch (tt.oldEntryStatus)
             {
-                batchDetailID = Convert.ToInt32(ds.Tables[0].Rows[0][0]);
-                return true;
-            }
+                case 6:
+                    {
+
+                        //6 means they should be in tdb but NOT in unbilled or billedtime
+
+                        if (tt.tbdid == 0)
+                            addToErrorsExp(0, "Recorded expense was not in ExpBatchDetail. Setting to Draft", tt);
+                        else //it IS in tbd but it should NOT be in unbilled or billed time
+                        {
+                            //unbilledtime
+                            if (tt.utid != 0)
+                            {
+                                //see if it is in prebillfeeitem
+                                if ((tt.pbrec != 0 && tt.pbbatch != 0) || (tt.pbrec1 != 0 && tt.pbbatch1 != 0)) //it IS in unbilled AND prebill
+                                    addToErrorsExp(8, "Recorded expense was on a PreBill. Setting to 'On PreBill'", tt);
+                                else //it is NOT in PreBill but IS in unbilledTime
+                                    addToErrorsExp(7, "Recorded expense was on in UnbilledExp. Setting to Posted", tt);
+                            }
+                            //billedtime
+                            else if (tt.btid != 0) //it IS in billed so it needs to be 9
+                                addToErrorsExp(9, "Recorded expense was in BilledExp. Setting to Billed", tt);
+
+                        }
+                        break;
+                    }
+
+
+                case 7:
+                    {
+
+                        //7 means they should be in unbilledtime AND TBD but NOT in prebillfeeitem or billedtime
+
+                        if (tt.tbdid == 0)
+                            addToErrorsExp(0, "Unbilled expense was not in ExpBatchDetail. Setting to Draft", tt);
+                        else //it IS in tbd but it needs to be in unbilledtime
+                        {
+                            //unbilledtime
+                            if (tt.utid != 0)//if it IS
+                            {
+                                //see if it is in prebillfeeitem
+                                if ((tt.pbrec != 0 && tt.pbbatch != 0) || (tt.pbrec1 != 0 && tt.pbbatch1 != 0)) //it IS in unbilled AND prebill
+                                    addToErrorsExp(8, "Unbilled expense was on a PreBill. Setting to 'On PreBill'", tt);
+                                // else it is NOT in PreBill so we do nothing because it is IN tbd and IN unbilledtime
+                            }
+                            else //it is in tbd but NOT unbilledtime so we see if it is in billedtime
+                            {
+                                //billedtime
+                                if (tt.btid != 0) //it IS in billed so it needs to be 9
+                                    addToErrorsExp(9, "Recorded expense was in BilledExp. Setting to Billed", tt);
+                                else //not in billedtime, unbilledtime or prebill so it is a 6
+                                    addToErrorsExp(6, "Unbilled expense was in ExpBatchDetail but NOT UnbilledExp. Setting to Recorded", tt);
+
+                            }
+
+
+                        }
+                        break;
+                    }
+
+                case 8:
+                    {
+
+                        //8 means they should be in tdb AND unbilledtime AND prebillfeeitem
+
+                        if (tt.tbdid == 0)
+                            addToErrorsExp(0, "Prebill expense was not in ExpBatchDetail. Setting to Draft", tt);
+                        else //it IS in tbd
+                        {
+                            //unbilledtime
+                            if (tt.utid != 0)//if it IS
+                            {
+                                //see if it is not in prebillfeeitem
+                                if ((tt.pbrec != 0 && tt.pbbatch != 0) || (tt.pbrec1 != 0 && tt.pbbatch1 != 0)) //it IS NOT in prebill
+                                    addToErrorsExp(7, "Prebill expense was not on PreBill but WAS in UnbilledExp. Setting to Posted", tt);
+                                //else do nothing because it is in all 3 tables
+                            }
+                            else //NOT in unbilledtime but it IS in tbd
+                            {
+                                //billedtime
+                                if (tt.btid != 0) //it IS in billed so it needs to be 9
+                                    addToErrorsExp(9, "Prebill texpense was in BilledExp. Setting to Billed", tt);
+                                else //not in unbilled, billed but IS in tbd
+                                    addToErrorsExp(6, "Prebill expense was not in UnbilledExp but IS in ExpBatchDetail. Setting to Recorded", tt);
+                            }
+
+
+
+                        }
+                        break;
+                    }
+
+                case 9:
+                    {
+                        //9 means it SHOULD be in TBD and billedtime but NOT in unbilledTime or PreBillFeeItem
+
+                        if (tt.tbdid == 0)
+                            addToErrorsExp(0, "Billed expense was not in ExpBatchDetail. Setting to Draft", tt);
+                        else //it IS in tbd but it should NOT be in unbilled or billed time
+                        {
+                            //unbilledtime
+                            if (tt.utid != 0)//if it IS
+                            {
+                                //see if it is in prebillfeeitem
+                                if (tt.pbrec != 0 && tt.pbbatch != 0) //it IS in unbilled AND prebill
+                                    addToErrorsExp(8, "Billed expense was on a PreBill. Setting to 'On PreBill'", tt);
+                                else //it is NOT in PreBill
+                                    addToErrorsExp(7, "Billed expense was in UnbilledExp. Setting to Posted", tt);
+                            }
+                            //billedtime
+                            else if (tt.btid == 0) //it IS NOT in billed so it needs to be 0
+                                addToErrorsExp(0, "Billed expense was not in BilledExp. Setting to Draft", tt);
+                        }
+                        break;
+                    }
+            }//end switch
+
+
+
+
         }
 
-        private bool isInUnbilledExpense(int entryID)
-        {
-            //ebdid from exoenseentrylink
-            string SQL = "select uebatch,UERecNbr from UnbilledExpense where ueid = " + entryID;
-            DataSet dd = _jurisUtility.RecordsetFromSQL(SQL);
-            temp = dd.Copy();
-            if (dd.Tables[0].Rows.Count > 0) //it IS in unbilled so it needs to be 7 or 8
-                return true;
-            else
-                return false;
-        }
 
-
-        private bool isOnPreBillExp(int batchID, int recNo)
-        {
-            String SQL = "SELECT   PBEDUEBatch as batch ,PBEDUERecNbr as recNo FROM PreBillExpDetailItem " +
-                         " where PBEDUEBatch = " + batchID + " and PBEDUERecNbr = " + recNo;
-
-            DataSet df = _jurisUtility.RecordsetFromSQL(SQL);
-            if (df.Tables[0].Rows.Count > 0) //it IS in prebillfeeitem, so it is an 8
-                return true;
-            else
-            {
-                df.Clear();
-                SQL = " SELECT PBESDUEBatch as batch,PBESDUERecNbr as recNo FROM PreBillExpSumDetail " +
-                        " where PBESDUEBatch = " + batchID + " and PBESDUERecNbr = " + recNo;
-                df = _jurisUtility.RecordsetFromSQL(SQL);
-                if (df.Tables[0].Rows.Count > 0)
-                    return true;
-                else
-                    return false;
-            }
-        }
-
-        private bool isBilledExp(int entryID)
-        {
-            //bdid from exoenseentrylink
-            string SQL = "select * from BilledExpenses where beid = " + entryID;
-            DataSet dd = _jurisUtility.RecordsetFromSQL(SQL);
-            if (dd.Tables[0].Rows.Count > 0) //it IS in billed so it needs to be 9
-                return true;
-            else
-                return false;
-        }
 
         private void addToErrorsExp(int entryType, string message, ExpenseEntry entry)
         {
@@ -265,11 +224,31 @@ namespace JurisUtilityBase
             correctedExpenses.Add(entry);
         }
 
-        public void updateExpEntries(ExpenseEntry ee)
+        public void updateExpenseEntries(List<ExpenseEntry> tList, int EntryStatus)
         {
-                String SQL = "update ExpenseEntry set EntryStatus = " + ee.newEntryStatus + " where EntryID = " + ee.ID;
-                _jurisUtility.ExecuteNonQuery(0, SQL);
+            string IDs = "";
+
+
+
+            if (tList.Count > 0)
+            {
+
+                foreach (ExpenseEntry tt in tList)
+                {
+                    IDs = IDs + tt.ID + ",";
+                }
+
+                IDs = IDs.TrimEnd(',');
+
+                String SQL = "update ExpenseEntry set EntryStatus = " + EntryStatus + " where EntryID in (" + IDs + ")";
+                _jurisUtility.ExecuteNonQueryCommand(0, SQL);
+
+            }
+
+
         }
+
+
 
     }
 }

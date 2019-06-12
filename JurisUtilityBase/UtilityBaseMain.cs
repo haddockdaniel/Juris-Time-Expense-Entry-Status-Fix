@@ -201,39 +201,43 @@ namespace JurisUtilityBase
             DataSet ff;
             if (flag == 1) //time only
             {
+                int counter = 0;
                 SQL = "select entryid from timeentry where entrystatus in (6,7,8,9)";
                 ff = _jurisUtility.RecordsetFromSQL(SQL);
                 foreach (DataRow r in ff.Tables[0].Rows)
-                    timeEntries.Add(r[0].ToString());
+                    counter++;
 
-                totalRecords = timeEntries.Count();
+                totalRecords = counter;
                 ff.Clear();
             }
             else if (flag == 2) //exp only
             {
+                int counter = 0;
                 SQL = "select entryid from expenseentry where entrystatus in (6,7,8,9)";
                 ff = _jurisUtility.RecordsetFromSQL(SQL);
                 foreach (DataRow r in ff.Tables[0].Rows)
-                    expEntries.Add(r[0].ToString());
+                    counter++;
 
-                totalRecords = expEntries.Count();
+                totalRecords = counter;
                 ff.Clear();
             }
             else if (flag == 3) //both
             {
+                int counter = 0;
                 SQL = "select entryid from timeentry where entrystatus in (6,7,8,9)";
                 ff = _jurisUtility.RecordsetFromSQL(SQL);
                 foreach (DataRow r in ff.Tables[0].Rows)
-                    timeEntries.Add(r[0].ToString());
+                    counter++;
 
-                totalRecords = timeEntries.Count();
+                totalRecords = counter;
                 ff.Clear();
+                counter = 0;
                 SQL = "select entryid from expenseentry where entrystatus in (6,7,8,9)";
                 ff = _jurisUtility.RecordsetFromSQL(SQL);
                 foreach (DataRow r in ff.Tables[0].Rows)
-                    expEntries.Add(r[0].ToString());
+                    counter++;
 
-                totalRecords = totalRecords + expEntries.Count();
+                totalRecords = totalRecords + counter;
                 ff.Clear();
             }
         }
@@ -395,7 +399,8 @@ namespace JurisUtilityBase
         private void buttonReport_Click(object sender, EventArgs e)
         {
 
-            System.Environment.Exit(0);
+            Environment.ExitCode = 1;
+            Application.Exit();
           
         }
 
@@ -406,64 +411,80 @@ namespace JurisUtilityBase
 
         private void backgroundWorkerTime_DoWork(object sender, DoWorkEventArgs e)
         {
+            current = 0;
             tproc = e.Argument as TimeProcessor;
             BackgroundWorker worker = sender as BackgroundWorker;
-            foreach (string ID in timeEntries)
-            {
                 try
                 {
-                    tproc.processTimeEntries(ID);
-                    current++;
-                    //UpdateStatus("Updating....", current, totalRecords);
-                    backgroundWorkerTime.ReportProgress(current);
+                    for (int a = 6; a < 10; a++)
+                    {
+                        tproc.processTimeEntries(a.ToString());
+                        backgroundWorkerTime.ReportProgress(current);
+                        var tlist = tproc.allTimes.ToList();
+                        foreach (TimeEntry tt in tlist)
+                        {
+                            current++;
+                            tproc.compareTimeEntries(tt);
+                            backgroundWorkerTime.ReportProgress(current);
+                        }
+                    }
 
                 }
                 catch (Exception ex1)
                 {
                     e.Result = ex1;
                 }
-            }
 
-            DataTable dt = ConvertTo(tproc.correctedTimes);
-            if (dt == null)
-                MessageBox.Show("dt is null");
-            Errors = new DataSet();
-            Errors.Tables.Add(dt);
-            DialogResult tpr = seePreReport();
-            if (tpr == DialogResult.Yes)
-            {
-                ReportDisplay rpds = new ReportDisplay(Errors, null, 0);
-                rpds.ShowDialog();
-                foreach (TimeEntry tt in tproc.correctedTimes)
+                if (tproc.correctedTimes.Count == 0)
                 {
-                    tproc.updateTimeEntries(tt);
-                    current++;
+                    MessageBox.Show("There were no issues found in your time entries," + "\r\n" + "so no changes are needed. The tool will now close");
+                    Environment.ExitCode = 1;
+                    Application.Exit();
                 }
-            }
-            else if (tpr == DialogResult.No)
-            {
-                UpdateStatus("", 0, totalRecords);
-                foreach (TimeEntry tt in tproc.correctedTimes)
+                else
                 {
-                    tproc.updateTimeEntries(tt);
-                    current++;
+                    DataTable dt = ConvertTo(tproc.correctedTimes);
+                    Errors = new DataSet();
+                    Errors.Tables.Add(dt);
+                    DialogResult tpr = seePreReport();
+                    if (tpr == DialogResult.Yes)
+                    {
+                        ReportDisplay rpds = new ReportDisplay(Errors, null, 0);
+                        rpds.ShowDialog();
+                        for (int d = 0; d < 10; d++)
+                        {
+                            var typeList = tproc.correctedTimes.Where(c => c.newEntryStatus == d).ToList();
+                            tproc.updateTimeEntries(typeList, d);
+                            backgroundWorkerTime.ReportProgress(current);
+                            current++;
+                        }
+                    }
+                    else if (tpr == DialogResult.No)
+                    {
+                        for (int d = 0; d < 10; d++)
+                        {
+                            var typeList = tproc.correctedTimes.Where(c => c.newEntryStatus == d).ToList();
+                            tproc.updateTimeEntries(typeList, d);
+                            backgroundWorkerTime.ReportProgress(current);
+                            current++;
+                        }
+                    }
+                    else if (tpr == DialogResult.Cancel)
+                    {
+                        Environment.ExitCode = 1;
+                        Application.Exit();
+                    }
                 }
-            }
-            else if (tpr == DialogResult.Cancel)
-            {
-                Environment.ExitCode = 1;
-                Application.Exit();
-            }
         }
 
         private void backgroundWorkerTime_ProgressChanged(object sender, ProgressChangedEventArgs e)
         {
-            UpdateStatus("Updating....", current, totalRecords * 2);
+            UpdateStatus("Updating....", current, totalRecords + 14);
         }
 
         private void backgroundWorkerTime_RunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
         {
-            UpdateStatus("All entries updated.", totalRecords * 2, totalRecords * 2);
+            UpdateStatus("All entries updated.", totalRecords + 14, totalRecords + 14);
 
             MessageBox.Show("The process is complete", "Confirmation", MessageBoxButtons.OK, MessageBoxIcon.None);
             Environment.ExitCode = 1;
@@ -473,52 +494,75 @@ namespace JurisUtilityBase
         private void UtilityBaseMain_FormClosing(object sender, FormClosingEventArgs e)
         {
             e.Cancel = true;
+            System.Environment.Exit(1);
         }
 
         private void backgroundWorkerExp_DoWork(object sender, DoWorkEventArgs e)
         {
+            current = 0;
             eproc = e.Argument as ExpenseProcessor;
             BackgroundWorker worker = sender as BackgroundWorker;
-            foreach (string ID in expEntries)
+            try
             {
-                try
+                for (int a = 6; a < 10; a++)
                 {
-                    eproc.processExpenseEntries(ID);
-                    current++;
+                    eproc.processExpenseEntries(a.ToString());
                     backgroundWorkerExp.ReportProgress(current);
+                    var tlist = eproc.allExp.ToList();
+                    foreach (ExpenseEntry tt in tlist)
+                    {
+                        current++;
+                        eproc.compareExpenseEntries(tt);
+                        backgroundWorkerExp.ReportProgress(current);
+                    }
+                }
 
-                }
-                catch (Exception ex1)
-                {
-                    MessageBox.Show("Error: " + ex1.Message);
-                }
+            }
+            catch (Exception ex1)
+            {
+                e.Result = ex1;
             }
 
-            DataTable dt = ConvertTo(eproc.correctedExpenses);
-            Errors.Tables.Add(dt);
-            DialogResult tpr = seePreReport();
-            if (tpr == DialogResult.Yes)
+            if (eproc.correctedExpenses.Count == 0)
             {
-                ReportDisplay rpds = new ReportDisplay(null, Errors, 1);
-                rpds.ShowDialog();
-                foreach (ExpenseEntry ee in eproc.correctedExpenses)
-                {
-                    eproc.updateExpEntries(ee);
-                    current++;
-                }
-            }
-            else if (tpr == DialogResult.No)
-            {
-                foreach (ExpenseEntry ee in eproc.correctedExpenses)
-                {
-                    eproc.updateExpEntries(ee);
-                    current++;
-                }
-            }
-            else if (tpr == DialogResult.Cancel)
-            {
+                MessageBox.Show("There were no issues found in your expense entries," + "\r\n" + "so no changes are needed. The tool will now close");
                 Environment.ExitCode = 1;
                 Application.Exit();
+            }
+            else
+            {
+
+                DataTable dt = ConvertTo(eproc.correctedExpenses);
+                Errors = new DataSet();
+                Errors.Tables.Add(dt);
+                DialogResult tpr = seePreReport();
+                if (tpr == DialogResult.Yes)
+                {
+                    ReportDisplay rpds = new ReportDisplay(null, Errors, 1);
+                    rpds.ShowDialog();
+                    for (int d = 0; d < 10; d++)
+                    {
+                        var typeList = eproc.correctedExpenses.Where(c => c.newEntryStatus == d).ToList();
+                        eproc.updateExpenseEntries(typeList, d);
+                        backgroundWorkerExp.ReportProgress(current);
+                        current++;
+                    }
+                }
+                else if (tpr == DialogResult.No)
+                {
+                    for (int d = 0; d < 10; d++)
+                    {
+                        var typeList = eproc.correctedExpenses.Where(c => c.newEntryStatus == d).ToList();
+                        eproc.updateExpenseEntries(typeList, d);
+                        backgroundWorkerExp.ReportProgress(current);
+                        current++;
+                    }
+                }
+                else if (tpr == DialogResult.Cancel)
+                {
+                    Environment.ExitCode = 1;
+                    Application.Exit();
+                }
             }
         }
 
@@ -539,76 +583,104 @@ namespace JurisUtilityBase
 
         private void backgroundWorkerAll_DoWork(object sender, DoWorkEventArgs e)
         {
+            current = 0;
             bproc = e.Argument as BothProcessor;
             BackgroundWorker worker = sender as BackgroundWorker;
-            foreach (string ID in expEntries)
+            try
             {
-                try
+                for (int a = 6; a < 10; a++)
                 {
-                    bproc.processExpenseEntries(ID);
-                    current++;
+                    bproc.processExpenseEntries(a.ToString());
                     backgroundWorkerAll.ReportProgress(current);
+                    var tlist = bproc.allExp.ToList();
+                    foreach (ExpenseEntry tt in tlist)
+                    {
+                        current++;
+                        bproc.compareExpenseEntries(tt);
+                        backgroundWorkerAll.ReportProgress(current);
+                    }
+                }
 
-                }
-                catch (Exception ex1)
-                {
-                    MessageBox.Show("Error: " + ex1.InnerException);
-                }
+            }
+            catch (Exception ex1)
+            {
+                e.Result = ex1;
             }
 
-            foreach (string ID in timeEntries)
+            try
             {
-                try
+                for (int a = 6; a < 10; a++)
                 {
-                    bproc.processTimeEntries(ID);
-                    current++;
+                    bproc.processTimeEntries(a.ToString());
                     backgroundWorkerAll.ReportProgress(current);
+                    var tlist = bproc.allTimes.ToList();
+                    foreach (TimeEntry tt in tlist)
+                    {
+                        current++;
+                        bproc.compareTimeEntries(tt);
+                        backgroundWorkerAll.ReportProgress(current);
+                    }
+                }
 
-                }
-                catch (Exception ex1)
-                {
-                    MessageBox.Show("Error: " + ex1.InnerException);
-                }
             }
-
+            catch (Exception ex1)
+            {
+                e.Result = ex1;
+            }
 
             DataTable dt = ConvertTo(bproc.correctedTimes);
             DataTable dx = ConvertTo(bproc.correctedExpenses);
+            Errors = new DataSet();
+            Errors1 = new DataSet();
             Errors.Tables.Add(dt);
             Errors1.Tables.Add(dx);
-            DialogResult tpr = seePreReport();
-            if (tpr == DialogResult.Yes)
+
+            if (bproc.correctedExpenses.Count == 0 && bproc.correctedTimes.Count == 0)
             {
-                ReportDisplay rpds = new ReportDisplay(Errors, Errors1, 2);
-                rpds.ShowDialog();
-                foreach (TimeEntry tt in tproc.correctedTimes)
-                {
-                    bproc.updateTimeEntries(tt);
-                    current++;
-                }
-                foreach (ExpenseEntry ee in eproc.correctedExpenses)
-                {
-                    eproc.updateExpEntries(ee);
-                    current++;
-                }
-            }
-            else if (tpr == DialogResult.No)
-            {
-                foreach (TimeEntry tt in tproc.correctedTimes)
-                {
-                    bproc.updateTimeEntries(tt);
-                    current++;
-                }
-                foreach (ExpenseEntry ee in eproc.correctedExpenses)
-                {
-                    eproc.updateExpEntries(ee);
-                    current++;
-                }
-            }
-            else if (tpr == DialogResult.Cancel)
-            {
+                MessageBox.Show("There were no issues found in your expense or time entries," + "\r\n" + "so no changes are needed. The tool will now close");
                 Environment.ExitCode = 1;
                 Application.Exit();
+            }
+            else
+            {
+
+                DialogResult tpr = seePreReport();
+                if (tpr == DialogResult.Yes)
+                {
+                    ReportDisplay rpds = new ReportDisplay(Errors, Errors1, 2);
+                    rpds.ShowDialog();
+                    for (int d = 0; d < 10; d++)
+                    {
+                        var typeList = bproc.correctedExpenses.Where(c => c.newEntryStatus == d).ToList();
+                        bproc.updateExpenseEntries(typeList, d);
+                        backgroundWorkerAll.ReportProgress(current);
+                        current++;
+                        var typeList1 = bproc.correctedTimes.Where(c => c.newEntryStatus == d).ToList();
+                        bproc.updateTimeEntries(typeList1, d);
+                        backgroundWorkerAll.ReportProgress(current);
+                        current++;
+                    }
+
+                }
+                else if (tpr == DialogResult.No)
+                {
+                    for (int d = 0; d < 10; d++)
+                    {
+                        var typeList = bproc.correctedExpenses.Where(c => c.newEntryStatus == d).ToList();
+                        bproc.updateExpenseEntries(typeList, d);
+                        backgroundWorkerAll.ReportProgress(current);
+                        current++;
+                        var typeList1 = bproc.correctedTimes.Where(c => c.newEntryStatus == d).ToList();
+                        bproc.updateTimeEntries(typeList1, d);
+                        backgroundWorkerAll.ReportProgress(current);
+                        current++;
+                    }
+                }
+                else if (tpr == DialogResult.Cancel)
+                {
+                    Environment.ExitCode = 1;
+                    Application.Exit();
+                }
             }
         }
 
@@ -624,6 +696,11 @@ namespace JurisUtilityBase
             MessageBox.Show("The process is complete", "Confirmation", MessageBoxButtons.OK, MessageBoxIcon.None);
             Environment.ExitCode = 1;
             Application.Exit();
+        }
+
+        private void label2_Click(object sender, EventArgs e)
+        {
+
         }
 
 

@@ -245,9 +245,10 @@
             this.label2.ForeColor = System.Drawing.Color.Brown;
             this.label2.Location = new System.Drawing.Point(173, 189);
             this.label2.Name = "label2";
-            this.label2.Size = new System.Drawing.Size(393, 16);
+            this.label2.Size = new System.Drawing.Size(359, 16);
             this.label2.TabIndex = 20;
-            this.label2.Text = "It is normal for this process to take more than 30 minutes";
+            this.label2.Text = "It is normal for this process to take up to 15 minutes";
+            this.label2.Click += new System.EventHandler(this.label2_Click);
             // 
             // backgroundWorkerTime
             // 
